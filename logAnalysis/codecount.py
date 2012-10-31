@@ -65,7 +65,7 @@ def initFileStatusDB():
     for oneLanguage in languageList:
         if enableDebug:
             print(oneLanguage)
-        codeCountDB[oneLanguage] = {'Add': 0 , 'Remove' : 0 }
+        codeCountDB[oneLanguage] = {'Add': 0 , 'Remove' : 0, 'Modify' : 0 }
     
     return codeCountDB  
 
@@ -76,8 +76,9 @@ def printFileStatusDB(statusDB):
     
     for oneLang in languageTypeList:
         print(oneLang + " Files: ")
-        print("    add line: " + str(statusDB[oneLang]['Add']) )
-        print("    remove line: " + str(statusDB[oneLang]['Remove']) )
+        print("    Add line: " + str(statusDB[oneLang]['Add']) )
+        print("    Remove line: " + str(statusDB[oneLang]['Remove']) )
+        print("    Modify line: " + str(statusDB[oneLang]['Modify']) )
        
 def parseDiffFile(diffLogFile):
     ''' parse the diff.log file: git diff tag1 tag2 > diff.log
@@ -97,7 +98,7 @@ def parseDiffFile(diffLogFile):
     
     for oneLanguage in languageList:
         #print(oneLanguage)
-        codeCountDB[oneLanguage] = {'Add': 0 , 'Remove' : 0 }
+        codeCountDB[oneLanguage] = {'Add': 0 , 'Remove' : 0, 'Modify' : 0 }
     
     #printFileStatusDB(codeCountDB)
     
@@ -115,36 +116,50 @@ def parseDiffFile(diffLogFile):
                 if result != None:
                     codeCountDB[filetype]['Add'] += result[0]
                     codeCountDB[filetype]['Remove'] += result[1]
+                    codeCountDB[filetype]['Modify'] += result[2]
                 filetype = "NOT_SET"
                 fileDiffSection = []
             
             filename = getFileNameByString(line)
             filetype = getFileType(filename)
-        
-        if line.startswith("+++") or line.startswith("---"):
-            line = ""
-        elif line.startswith("+") or line.startswith("-"):
+        else:
             fileDiffSection.append(line)
-            
+        #=======================================================================
+        # if line.startswith("+++") or line.startswith("---"):
+        #    line = ""
+        # elif line.startswith("+") or line.startswith("-"):
+        #    fileDiffSection.append(line)
+        #=======================================================================
+    if fileDiffSection != None:
+        result = parseFile(filetype,fileDiffSection)
+        if result != None:
+            codeCountDB[filetype]['Add'] += result[0]
+            codeCountDB[filetype]['Remove'] += result[1]
+            codeCountDB[filetype]['Modify'] += result[2]
+                            
     logfile.close()
 
     printFileStatusDB(codeCountDB)
 
 def parseFile(filetype,lines):
-    if filetype == "Java":
-        return parseJavaFile(filetype, lines)
-    elif filetype == "Cxx":
-        return parseCxxFile(filetype, lines)
-    elif filetype == "Shell":
-        return parseShellFile(filetype, lines)
-    elif filetype == "Xml":
-        return parseXmlFile(filetype, lines)
-    elif filetype == "Dup":
-        return parseDupFile(filetype, lines)
-    else:
-        return parseOthersFile(filetype, lines)
+    #===========================================================================
+    # if filetype == "Java":
+    #    return parseJavaFile(filetype, lines)
+    # elif filetype == "Cxx":
+    #    return parseCxxFile(filetype, lines)
+    # elif filetype == "Shell":
+    #    return parseShellFile(filetype, lines)
+    # elif filetype == "Xml":
+    #    return parseXmlFile(filetype, lines)
+    # elif filetype == "Dup":
+    #    return parseDupFile(filetype, lines)
+    # else:
+    #    return parseOthersFile(filetype, lines)
+    #===========================================================================
+    
+    return parseFileSection(filetype, lines)
 
-def isIgnoreLine(filetype, line):
+def isIgnoreCommentLine(filetype, line):
     javaPatternString = '^[\+\-]$|^[\+\-][\s]*\*.*$|^[\+\-][\s]*\/\*.*$|^[\+\-]\/\/.*$'
     cxxPatternString = '^[\+\-]$'
     ingorePattern = re.compile(javaPatternString + '|' + cxxPatternString )
@@ -153,12 +168,128 @@ def isIgnoreLine(filetype, line):
         return False
     else:
         return True
+
+def isChangeLine(filetype, line):
+    if line.startswith("+") or line.startswith("-"):
+        return True
+    else:
+        return False
     
+def parseFileSection(filetype, lines):
+    removeLineNum = 0
+    addLineNum = 0
+    modifyLineNum = 0
+    
+    startCount = False
+    startChangeBlock = 0   # 0 is not started, 1 is started, 2 is end
+    fileChangeStatus = "MODIFY"
+    
+    newCodeChangeList = {'Add': 0 , 'Remove' : 0, 'Modify' : 0 }
+    
+    modifyCodeList = []
+    
+    for line in lines:
+        ## ignore below lines:
+        #===============================================================================
+        # diff --git a/.gitignore b/.gitignore
+        # old mode 100644
+        # new mode 100755
+        # index 1404ec0..363f34d
+        # --- a/.gitignore
+        # +++ b/.gitignore
+        #===============================================================================
+        if startCount == False:
+            if line.startswith('--- ') :
+                startCount = False
+            elif line.startswith('+++ ') :
+                startCount = True
+            elif line == 'new file mode' :
+                fileChangeStatus = "ADD"
+            elif line == 'deleted file mode' :
+                fileChangeStatus = "DELETE"
+            continue
+
+        #===============================================================================
+        # Ignore comment lines
+        #===============================================================================
+        if isIgnoreCommentLine(filetype, line[1:]) == True:
+            continue
+        
+        if fileChangeStatus == "ADD" :
+            addLineNum = addLineNum + 1
+        elif fileChangeStatus == "DELETE" :
+            addLineNum = addLineNum + 1
+        else:
+            #
+            # Modify file status
+            #
+            if isChangeLine(filetype, line) == False:
+                if startChangeBlock == 1 :
+                    #
+                    # Save status, start new section
+                    #
+                    tmpCodeLine = reCalLineNum(newCodeChangeList)
+                    modifyCodeList.append(tmpCodeLine)
+                    
+                    if enableDebug:
+                        print("function:parseFileSection")
+                        print(tmpCodeLine)
+                    newCodeChangeList = {'Add': 0 , 'Remove' : 0, 'Modify' : 0 }
+
+                startChangeBlock = 0             
+                continue
+            
+            #
+            # parse change lines
+            #  
+            if line.startswith("+") or line.startswith("-"):
+                if startChangeBlock == 0:
+                    startChangeBlock = 1
+                    
+                if line.startswith("+"):
+                    newCodeChangeList['Add'] += 1
+                elif line.startswith("-"):
+                    newCodeChangeList['Remove'] += 1
+            
+            if enableDebug:
+                print(line)
+    
+    if startChangeBlock == 1:
+        tmpCodeLine = reCalLineNum(newCodeChangeList)
+        modifyCodeList.append(tmpCodeLine)
+ 
+    for oneItem in modifyCodeList:
+        addLineNum += oneItem['Add']
+        removeLineNum += oneItem['Remove']
+        modifyLineNum += oneItem['Modify'] 
+         
+    if enableDebug:
+        print("function:parseFileSection")
+        print("add line: " + str(addLineNum) + " remove line: " + str(removeLineNum) + " modify line: " + str(modifyLineNum) )
+    
+    return [addLineNum, removeLineNum, modifyLineNum]
+
+def reCalLineNum(codeLineList):
+    if enableDebug:
+        print("function:reCalLineNum")
+        print(codeLineList)
+    if codeLineList['Add'] > codeLineList['Remove']:
+        codeLineList['Modify'] = codeLineList['Remove']
+        codeLineList['Add'] = codeLineList['Add'] - codeLineList['Remove']
+        codeLineList['Remove'] = 0
+    else:
+        codeLineList['Modify'] = codeLineList['Add']
+        codeLineList['Remove'] = codeLineList['Remove'] - codeLineList['Add']
+        codeLineList['Add'] = 0
+
+    return {'Add': codeLineList['Add'] , 'Remove' : codeLineList['Remove'], 'Modify' : codeLineList['Modify'] }      
+        
 def parseJavaFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
+    modifyLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -172,14 +303,14 @@ def parseJavaFile(filetype, lines):
     if enableDebug:
         print("add line: " + str(addLineNum) + " remove line: " + str(removeLineNum) )
     
-    return [addLineNum, removeLineNum]
+    return [addLineNum, removeLineNum, modifyLineNum]
 
 
 def parseCxxFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -199,7 +330,7 @@ def parseXmlFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -219,7 +350,7 @@ def parseDupFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -239,7 +370,7 @@ def parseShellFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -258,7 +389,7 @@ def parseOthersFile(filetype, lines):
     removeLineNum = 0
     addLineNum = 0
     for line in lines:
-        if isIgnoreLine(filetype, line) == True:
+        if isIgnoreCommentLine(filetype, line) == True:
             continue
         
         if line.startswith("+"):
@@ -279,10 +410,10 @@ def generateGitDiffLog(repoRoot, sha1, sha2, diffLogFilePath):
     
     
 def usage():
-    print '''
+    print('''
 Usage: 
     codecount.py --repo <git_repo_root> --version <sha1> <sha2>
-    '''
+    ''')
 
 def executeTest():
     logFile='/tmp/gitdiff.log'
@@ -290,7 +421,11 @@ def executeTest():
     generateGitDiffLog('/var/tmp/repo/emacm/ma', 'c5c3bdadfe82e4da2a1d06353e4d276d2b3046a8', 'HEAD', logFile)
     initFileStatusDB()
     parseDiffFile(logFile)    
-    
+
+def testParseDiffFile():
+    initFileStatusDB()
+    parseDiffFile("test.log")
+           
 def countLineChange(repoRoot, versionA, versionB):
     logFile='/tmp/gitdiff.log'
     
@@ -299,7 +434,7 @@ def countLineChange(repoRoot, versionA, versionB):
     initFileStatusDB()
     parseDiffFile(logFile)    
          
-if __name__ == '__main__':  
+if __name__ == '__main__':
     num = 1
     while num < len(sys.argv):
         if sys.argv[num] == '--repo':
@@ -312,10 +447,18 @@ if __name__ == '__main__':
         elif sys.argv[num] == '--log-file':
             logFile = sys.argv[num+1]
             num = num + 1
+        elif sys.argv[num] == '--execute-test':
+            executeTest = True
+        elif sys.argv[num] == '--debug':
+            enableDebug = True
         else:
             usage()
             sys.exit(1)
         
         num = num + 1
-        
+    
+    if executeTest == True:
+        testParseDiffFile()
+        sys.exit(1)
+                 
     countLineChange(repoRoot, versionA, versionB)
